@@ -17,6 +17,10 @@ Parameters:
         Description: How many ECS hosts do you want to initially deploy?
         Type: Number
         Default: 4
+        
+    KeyName:
+        Description: Access ECS hosts with existing key
+        Type: AWS::EC2::KeyPair::KeyName
 
     VPC:
         Description: Choose which VPC this ECS cluster should be deployed to
@@ -110,6 +114,7 @@ Resources:
             SecurityGroups: 
                 - !Ref SecurityGroup
             IamInstanceProfile: !Ref ECSInstanceProfile
+            KeyName: !Ref KeyName
             UserData: 
                 "Fn::Base64": !Sub |
                     #!/bin/bash
