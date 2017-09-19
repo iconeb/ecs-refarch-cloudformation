@@ -2,6 +2,23 @@ Description: >
     This template deploys an ECS cluster to the provided VPC and subnets 
     using an Auto Scaling Group
 
+Metadata: 
+  AWS::CloudFormation::Interface: 
+    ParameterGroups: 
+      - Label: 
+          default: "Network Configuration"
+        Parameters: 
+          - VPC
+          - Subnets
+          - SecurityGroup
+      - Label: 
+          default: "Amazon EC2 Configuration"
+        Parameters:
+          - EnvironmentName 
+          - InstanceType
+          - ClusterSize
+          - KeyName
+
 Parameters:
 
     EnvironmentName:
