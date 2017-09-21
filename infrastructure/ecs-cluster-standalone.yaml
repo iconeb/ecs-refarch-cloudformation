@@ -50,6 +50,20 @@ Parameters:
     SecurityGroup:
         Description: Select the Security Group to use for the ECS cluster hosts
         Type: AWS::EC2::SecurityGroup::Id
+        
+    EFSMount:
+        Description: Select EFS exported name or IP address
+        Type: String
+
+    DockerProxy:
+        Description: Set Docker proxy for environment in form http://server:port
+        Type: String
+        Default: http://proxy-aws.risorse.enel:8080/
+        
+    DockerNoProxy:
+        Description: Set Docker proxy exceptions in comma separated string
+        Type: String
+        Default: 169.254.169.254,s3.eu-central-1.amazonaws.com,s3-eu-central-1.amazonaws.com,*.s3.eu-central-1.amazonaws.com,*.s3-eu-central-1.amazonaws.com,risorse.enel,*.risorse.enel,enelint.global,*.enelint.global,10.*,172.*.*
 
 Mappings:
 
@@ -138,14 +152,28 @@ Resources:
                     yum install -y aws-cfn-bootstrap
                     /opt/aws/bin/cfn-init -v --region ${AWS::Region} --stack ${AWS::StackName} --resource ECSLaunchConfiguration
                     /opt/aws/bin/cfn-signal -e $? --region ${AWS::Region} --stack ${AWS::StackName} --resource ECSAutoScalingGroup
-                    echo "Ciao" > /tmp/fede
 
         Metadata:
             AWS::CloudFormation::Init:
                 config:
+                    packages:
+                        yum:
+                            nfs-utils
                     commands:
                         01_add_instance_to_cluster:
-                            command: !Sub echo ECS_CLUSTER=${ECSCluster} >> /etc/ecs/ecs.config
+                            command: !Sub echo "ECS_CLUSTER=${ECSCluster}" >> /etc/ecs/ecs.config
+                        02_set_docker_proxy:
+                            command: !Sub |
+                                echo "#Set proxy
+                                export HTTP_PROXY=${DockerProxy}
+                                export HTTPS_PROXY=${DockerProxy}
+                                export NO_PROXY=${DockerNoProxy}
+                                " | tee -a /etc/sysconfig/docker             
+                        03_set_default_ecs_region:
+                             command: !Sub echo "AWS_DEFAULT_REGION=${AWS::Region}" >> /etc/ecs/ecs.config
+                        04_set_efs_mountpoint:
+                             command: !Sub echo "{EFSMount}:/ /mount-point nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2 0 0" >> /etc/fstab
+                             
                     files:
                         "/etc/cfn/cfn-hup.conf":
                             mode: 000400
