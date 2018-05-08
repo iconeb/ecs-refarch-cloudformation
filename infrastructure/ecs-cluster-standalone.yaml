@@ -10,23 +10,34 @@ Metadata:
         Parameters: 
           - VPC
           - Subnets
-          - SecurityGroup
+          - SecurityGroups
       - Label: 
           default: "Amazon EC2 Configuration"
         Parameters:
           - EnvironmentName 
           - InstanceType
+          - ClusterMaxSize
           - ClusterSize
           - KeyName
       - Label:
           default: "Docker Host Configuration"
         Parameters:
-          - EFSMount
           - DockerProxy
           - DockerNoProxy
-
+      - Label:
+          default: "Specify EFS related parameters"
+        Parameters:
+          - EFSExisting
+          - EFSMount
+      - Label:
+          default: "Specify Instance parameters"
+        Parameters:
+          - SysctlFile
+          - SysctlSource
+         
 Parameters:
 
+    # Parameters for ECS: Name, Type, Size 
     EnvironmentName:
         Description: An environment name that will be prefixed to resource names
         Type: String
@@ -34,17 +45,23 @@ Parameters:
     InstanceType: 
         Description: Which instance type should we use to build the ECS cluster?
         Type: String
-        Default: c4.large
+        Default: m4.large
 
     ClusterSize:
-        Description: How many ECS hosts do you want to initially deploy?
+        Description: How many ECS hosts do you want to deploy at startup?
         Type: Number
-        Default: 4
+        Default: 2
+
+    ClusterMaxSize:
+        Description: How many ECS hosts do you want to deploy as a maximum?
+        Type: Number
+        Default: 4        
         
     KeyName:
         Description: Access ECS hosts with existing key
         Type: AWS::EC2::KeyPair::KeyName
 
+    # Network parameters: VPC, subnets and security groups
     VPC:
         Description: Choose which VPC this ECS cluster should be deployed to
         Type: AWS::EC2::VPC::Id
@@ -53,36 +70,49 @@ Parameters:
         Description: Choose which subnets this ECS cluster should be deployed to
         Type: List<AWS::EC2::Subnet::Id>
 
-    SecurityGroup:
+    SecurityGroups:
         Description: Select the Security Group to use for the ECS cluster hosts
-        Type: AWS::EC2::SecurityGroup::Id
-        
-    EFSHost:
-        Description: Select EFS exported name or IP address
-        Type: String
+        Type: List<AWS::EC2::SecurityGroup::Id>
+
+    # EFS Parameters: mount point and host; if empty new EFS will be created
+    EFSExisting:
+        Description: "EFS drive to store client content. If left empty a new drive will be created automatically."
+        Type: "String"
+        Default: ""
 
     EFSMount:
         Description: Select EFS mountpoint (path will be created)
         Type: String
-        
+
+    # Docker specific parameters regarding proxy
     DockerProxy:
         Description: Set Docker proxy for environment in form http://server:port
         Type: String
-        Default: http://proxy-aws.risorse.enel:8080/
+        Default: http://proxy-aws.xxxx.xxxxx:8080/
         
     DockerNoProxy:
         Description: Set Docker proxy exceptions in comma separated string
         Type: String
         Default: 169.254.169.254,s3.eu-central-1.amazonaws.com,s3-eu-central-1.amazonaws.com,*.s3.eu-central-1.amazonaws.com,*.s3-eu-central-1.amazonaws.com,risorse.enel,*.risorse.enel,enelint.global,*.enelint.global,10.*,172.*
 
+    # Other AMI parameters
+    SysctlFile:
+        Description: Specify target sysctl file
+        Type: String
+        Default: 90-enel.conf
+        
+    SysctlSource:
+        Description: Specify URL where to retrieve list of kernel tuning parameters (sysctl)
+        Type: String
+        
 Mappings:
 
     # These are the latest ECS optimized AMIs as of February 2017:
     #
-    #   amzn-ami-2017.03.d-amazon-ecs-optimized
-    #   ECS agent:    1.14.3
-    #   Docker:       1.12.6
-    #   ecs-init:     1.14.0-2
+    #   amzn-ami-2017.09.g-amazon-ecs-optimized
+    #   ECS agent:    1.16.2
+    #   Docker:       17.09.1-ce
+    #   ecs-init:     1.16.2-1
     #
     # You can find the latest available on this page of our documentation:
     # http://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-optimized_AMI.html
@@ -90,29 +120,64 @@ Mappings:
 
     AWSRegionToAMI:
         us-east-2:
-            AMI: ami-207b5a45
+            AMI: ami-ce1c36ab
         us-east-1:
-            AMI: ami-04351e12
+            AMI: ami-28456852
         us-west-2:
-            AMI: ami-57d9cd2e
+            AMI: ami-decc7fa6
         us-west-1:
-            AMI: ami-7d664a1d
+            AMI: ami-74262414
+        eu-west-3:
+            AMI: ami-9aef59e7
         eu-west-2:
-            AMI: ami-ff15039b
+            AMI: ami-67cbd003
         eu-west-1:
-            AMI: ami-809f84e6
+            AMI: ami-1d46df64
         eu-central-1:
-            AMI: ami-a3a006cc
+            AMI: ami-509a053f
+        ap-northeast-2:
+            AMI: ami-c212b2ac
         ap-northeast-1:
-            AMI: ami-e4657283
+            AMI: ami-872c4ae1
         ap-southeast-2:
-            AMI: ami-42e9f921
+            AMI: ami-58bb443a
         ap-southeast-1:
-            AMI: ami-19f7787a
+            AMI: ami-910d72ed
         ca-central-1:
-            AMI: ami-3da81759
+            AMI: ami-435bde27
+
+Conditions:
+    CreateEFS: !Equals [ !Ref EFSExisting, '' ]
+    PutSysctl: !Equals [ !Ref SysctlSource, '' ]
 
 Resources:
+
+    EFSMountTargetSecurityGroup:
+        Condition: CreateEFS
+        Type: AWS::EC2::SecurityGroup
+        Properties:
+            VpcId: !Ref VPC
+            GroupDescription: Security group for mount target
+            SecurityGroupIngress:
+            - IpProtocol: tcp
+              FromPort: '2049'
+              ToPort: '2049'
+              CidrIp: 0.0.0.0/0
+
+    EFSFileSystem:
+        Condition: CreateEFS
+        Type: AWS::EFS::FileSystem
+        Properties:
+            PerformanceMode: generalPurpose
+
+    EFSMountTarget:
+        Condition: CreateEFS
+        Type: AWS::EFS::MountTarget
+        Properties:
+            FileSystemId: !Ref EFSFileSystem
+            SubnetId: !Select [ 0, !Ref Subnets ]
+            SecurityGroups:
+                - !Ref EFSMountTargetSecurityGroup
 
     ECSCluster:
         Type: AWS::ECS::Cluster
@@ -124,8 +189,8 @@ Resources:
         Properties: 
             VPCZoneIdentifier: !Ref Subnets
             LaunchConfigurationName: !Ref ECSLaunchConfiguration
-            MinSize: !Ref ClusterSize
-            MaxSize: !Ref ClusterSize
+            MinSize: 1
+            MaxSize: !Ref ClusterMaxSize
             DesiredCapacity: !Ref ClusterSize
             Tags: 
                 - Key: Name
@@ -152,20 +217,38 @@ Resources:
         Properties:
             ImageId:  !FindInMap [AWSRegionToAMI, !Ref "AWS::Region", AMI]
             InstanceType: !Ref InstanceType
-            SecurityGroups: 
-                - !Ref SecurityGroup
+            SecurityGroups: !Ref SecurityGroups
             IamInstanceProfile: !Ref ECSInstanceProfile
             KeyName: !Ref KeyName
             UserData: 
                 "Fn::Base64": !Sub |
                     #!/bin/bash
+                    echo "http_proxy=${DockerProxy}" >> /etc/yum.conf
+                    #DNS ip address is second IP after network address
+                    #dnsip=$(ip -o -4 a s eth0 | awk '{print $4}' | xargs ipcalc -n | awk -F'=' '{print $2}' | awk -F'.' '{ printf "%d.%d.%d.%d", $1, $2, $3, $4+2 }')
+                    yum -y install dnsmasq && \
+                    chkconfig dnsmasq on && \
+                    echo "server=/efs.eu-central-1.amazonaws.com/169.254.169.253" > /etc/dnsmasq.d/efs.conf && \
+                    sed -i '0,/^nameserver/s//nameserver 127.0.0.1\nnameserver/' /etc/resolv.conf && \
+                    service dnsmasq start
                     yum install -y aws-cfn-bootstrap
-                    /opt/aws/bin/cfn-init -v --region ${AWS::Region} --stack ${AWS::StackName} --resource ECSLaunchConfiguration
+                    /opt/aws/bin/cfn-init -v -c configDefault --region ${AWS::Region} --stack ${AWS::StackName} --resource ECSLaunchConfiguration
                     /opt/aws/bin/cfn-signal -e $? --region ${AWS::Region} --stack ${AWS::StackName} --resource ECSAutoScalingGroup
-
         Metadata:
             AWS::CloudFormation::Init:
-                config:
+                configSets:
+                    configDefault:
+                        - "configDefault"
+                    configSysctl:
+                        - "configSysctl"
+                configSysctl:
+                    files:
+                        "/etc/sysctl.d/${SysctlFile}":
+                            mode: 000644
+                            owner: root
+                            group: root
+                            source: ${SysctlSource}                
+                configDefault:
                     packages:
                         yum:
                             nfs-utils: []
@@ -182,10 +265,19 @@ Resources:
                         03_set_default_ecs_region:
                              command: !Sub echo "AWS_DEFAULT_REGION=${AWS::Region}" >> /etc/ecs/ecs.config
                         04_set_efs_mountpoint:
-                            command: !Sub |
-                                mkdir -p ${EFSMount}
-                                echo "${EFSHost}:/ ${EFSMount} nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2 0 0" >> /etc/fstab     
-                    files:
+                            command: !Sub 
+                                - |+
+                                  mkdir -p /${EFSMount}
+                                  echo "${EFSHost}.efs.${AWS::Region}.amazonaws.com:/ /${EFSMount} nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2 0 0" >> /etc/fstab
+                                  mount /${EFSMount}
+                                - EFSHost:
+                                    Fn::If:
+                                      - CreateEFS
+                                      - !Ref EFSFileSystem
+                                      - !Ref EFSExisting
+                        05_set_sysctl:
+                            command: !Sub sysctl -p
+                    files:                                
                         "/etc/cfn/cfn-hup.conf":
                             mode: 000400
                             owner: root
